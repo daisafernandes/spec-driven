@@ -1,243 +1,192 @@
 ---
 name: code-review
-description: >-
-  Reviews diffs on three axes — Spec (CA/RF), Standards (AGENTS.md, tests,
-  smells), and Quality (bugs, security, performance, correctness). WIP: local
-  branch or post-implement → report, review-gaps on FAIL, handoff to
-  implement/pr-ship. PR (URL/#/gh): artifact only, no
-  handoff. Use for CA validation, branch review,
-  bug/security/quality review, or existing PR review. Does not implement code.
+description: >
+  Reviews PRs, branches, WIP diffs, and CA/spec validations on three separate axes: Spec (CA/RF), Standards (AGENTS.md and repo conventions), and Quality (bugs, security, performance, correctness, maintainability). Use when the user asks for a code review, PR review, branch review, validation against a spec/CA, or bug/security/quality review of changed code.
 ---
 
 # Code Review
 
-## Mindset
+Review changed code only. Report findings; do not implement fixes unless the user explicitly asks.
 
-- **Three axes, never mixed or ranked** — Spec · Standards · Quality.
-- **Spec is source of truth** — cite spec lines; do not invent CA/RF.
-- **Quality focuses on changed code** — diff hunks only; do not flag untouched legacy unless the change exposes or worsens it.
-- **WIP:** report only; gaps file + remediation via `implement`.
-- **PR:** artifact + chat report, then **stop** — author fixes; no gaps/loop/handoff.
+## Core Rules
 
-## Context
+- Keep **Spec**, **Standards**, and **Quality** separate. Do not merge severities across axes.
+- Every finding needs concrete evidence from the diff or referenced spec/standard. If you cannot cite it, do not report it.
+- Review changed hunks only. Flag untouched legacy only when the change exposes or worsens the risk.
+- Spec is source of truth. Cite CA/RF/spec lines; do not invent missing requirements.
+- PR mode stops after the report and artifact. No remediation loop, no handoff, no `gh pr review` unless asked.
+- WIP mode may write a gaps file only for blocking/Critical findings, then offer remediation.
 
-| Context | Signal | Mode | Axes | After report |
-| -------- | ------ | ---- | ---- | ------------ |
-| WIP | Spec path / post-`implement` / "validate CA" | Spec | Spec + Standards + Quality | gaps + loop + handoff |
-| WIP | Local branch, diff from main/SHA | Branch | Standards + Quality (+ Spec if found) | same |
-| PR | URL, `#123`, "review the PR" | — | Standards + Quality (+ Spec if in PR) | **artifact only** |
-| Ambiguous | "review" without PR or branch | — | — | **ask** |
+## Context Detection
 
-## Process
+| Context | Signal | Axes | After report |
+| ------- | ------ | ---- | ------------ |
+| WIP Spec | Spec path, post-`implement`, "validate CA" | Spec + Standards + Quality | gaps + optional remediation |
+| WIP Branch | Local branch or diff from base/SHA | Standards + Quality (+ Spec if found) | gaps + optional remediation |
+| PR | URL, `#123`, "review the PR" | Standards + Quality (+ Spec if found) | artifact + stop |
+| Ambiguous | "review" without PR, branch, spec, or base | ask one clarifying question | - |
 
-**Goal:** pin diff → three axes (parallel) → report → (**WIP only**) gaps + remediation loop.
+## Workflow
 
-### 1. Pin
+### 1. Pin Scope
 
-**WIP:** Fixed-point = user input (`main`, SHA, `HEAD~N`, tag); default `main`/`master`.
+Establish a stable review boundary before reviewing.
 
-1. `git rev-parse <fp>` — invalid → stop and ask.
-2. `git diff <fp>...HEAD` (three-dot) — empty → stop.
-3. `git log <fp>..HEAD --oneline`.
-4. Store `fixed_point`, SHA, diff command, commits. **Reuse same fp** on revalidation.
+**WIP:** use the user-provided base when present; otherwise infer the default branch (`main`, `master`, or upstream default). Capture:
 
-**PR:**
+- fixed-point ref and resolved SHA
+- diff from fixed-point to `HEAD`
+- commits included in the review
 
-1. Resolve `#123`, URL, or `gh pr list --head <branch>`.
-2. `gh pr view <n> --json number,title,url,baseRefName,headRefName,commits,body`.
-3. `gh pr diff <n>` — empty → stop. Do **not** use local `git diff` unless asked.
-4. Store `pr_number`, `pr_url`, `base`, `head`, diff, commits.
+Use a three-dot diff for branch work against its merge base. Reuse the same fixed-point on revalidation.
 
-PR fixed-point in report: `PR #<n> (base: <base>…head: <head>)`.
+**PR:** resolve the PR number/URL/current branch using GitHub CLI, provider context, or available metadata. Capture:
 
-### 2. Spec discovery
+- PR number, URL, base, head
+- PR diff from the hosting provider
+- commits included in the PR
 
-1. User path → 2. commits/PR body refs → 3. `docs/specs/` match by id/branch/title.
-4. Nothing found → **WIP:** ask · **PR:** Spec = `"no spec available"` (Standards + Quality only).
+For PR reviews, prefer provider/CLI PR diff over local git diff unless the user asks otherwise.
 
-### 3. Spawn axes (parallel)
+If the diff is empty, stop and report that there is nothing to review.
 
-One message, up to **three** `Task` / `generalPurpose` subagents, `readonly: true`. Include in each: diff, commits, fixed-point. **Paste checklist from [Axes](#axes)** in each prompt.
+### 2. Discover Inputs
 
-| Sub-agent | When | Extra input |
-| --------- | ---- | ----------- |
-| **Spec** | Spec found | Spec content/path |
-| **Standards** | Always | `AGENTS.md` |
-| **Quality** | Always | — |
+- **Spec:** prefer user path; otherwise scan commit messages, PR body, branch/title, then `docs/specs/` by id/title. If none exists: WIP asks whether to continue without Spec; PR reports `Spec: no spec available`.
+- **Standards:** read repo guidance (`AGENTS.md`, README pointers, documented test conventions) when available. If none exists, review Standards only for explicit repo-local patterns visible in the changed area.
+- **Quality:** use the diff plus minimal surrounding code needed to validate whether each suspected issue is real.
 
-No spec → skip Spec subagent; run Standards + Quality only.
+### 3. Review Axes
 
-### 4. Report
+Use subagents in parallel when available and useful; otherwise review the axes sequentially. Subagents must be read-only and receive the same pinned diff, commits, fixed-point/PR metadata, and the relevant checklist below.
 
-Findings under `## Spec`, `## Standards`, and `## Quality` — separate rankings. Format: [Report](#report).
+#### Spec
 
-**Spec / Standards severity:** `blocking` | `important` | `nit`
+Report only mismatches against explicit CA/RF/spec text.
 
-**Quality severity:** `Critical` | `Warning` | `Info`
+| Finding | Severity |
+| ------- | -------- |
+| missing CA/RF behavior | blocking |
+| wrong behavior versus spec | blocking |
+| incomplete required edge/assertion | blocking |
+| incomplete non-required detail | important |
+| scope creep outside spec | important, or blocking if API/contract changed without RF |
 
-**Verdict mapping (for FAIL / gaps):**
+Test without a CA/outcome assertion counts as partial. When the spec is ambiguous, ask or record an assumption; do not invent expected behavior.
 
-| Axis | Triggers FAIL / gap |
-| ---- | ------------------- |
-| Spec / Standards | `blocking` |
-| Quality | `Critical` |
+#### Standards
 
-- Verdict: any FAIL trigger → `FAIL`; only important/nit / Warning/Info → `PASS_WITH_NITS`; zero findings → `PASS`
+Report mandatory pattern violations and repo-specific conventions.
 
-| Outcome | Action |
-| ------- | ------ |
-| **PR** (any verdict) | Save artifact → deliver in chat → **stop** |
-| **WIP** PASS / PASS_WITH_NITS | Report in chat; offer `pr-ship` (+ optional `qa-test-plan`, `security-code-analysis`) |
-| **WIP** FAIL | Save gaps → §5 |
+- `blocking`: mandatory `AGENTS.md` / project standard / required test convention violation.
+- `important`: should fix, but not mandatory or not delivery-blocking.
+- `nit`: small cleanup with clear repo/style basis.
 
-### 5. Loop 2C (WIP + FAIL only)
+Use Fowler smell names only when they explain a changed-code problem: Mysterious Name, Duplicated Code, Feature Envy, Data Clumps, Primitive Obsession, Repeated Switches, Shotgun Surgery, Divergent Change, Speculative Generality, Message Chains, Middle Man, Refused Bequest.
 
-Ask **once per round** (max **3**):
+No preference-only style comments without a repo standard or smell basis.
 
-```markdown
-### Remediation (round N/3)
+#### Quality
 
-There are N blocking/critical findings. File: <path>
-Implement now with spec-implement? [yes / no]
-```
+Find concrete bugs and risks introduced or exposed by the change.
 
-| Response | Action |
-| -------- | ------ |
-| **no** | Stop; return gaps path + verdict |
-| **yes** | Handoff `.agents/skills/implement/SKILL.md` with gaps file; spec = CA source; gaps = round scope |
+| Severity | When |
+| -------- | ---- |
+| Critical | security vulnerability, data loss, crash, corrupt state |
+| Warning | bug, performance problem, risky anti-pattern |
+| Info | minor maintainability suggestion |
 
-After implement: revalidate (same fp) → overwrite gaps with residual → blocking/critical & round < 3 → ask again. Round 3 still blocking/critical → final verdict + residual; **no** `pr-ship`. Do not restart without explicit request.
+Categories: `[Security]`, `[Performance]`, `[Correctness]`, `[Maintainability]`.
 
-## Axes
+Scan for:
 
-Paste in subagent prompts (sub-agent does not read this skill). Max ~400 words each.
+- **Security:** SQL/command injection, XSS, CSRF, auth/authz flaws, secrets, insecure deserialization, path traversal, SSRF.
+- **Performance:** N+1 queries, unbounded loops/queries, resource leaks, avoidable hot-path allocations, missing DB index when query shape changes.
+- **Correctness:** null/empty/overflow edge cases, races, error handling, off-by-one, type/contract mismatch.
+- **Maintainability:** unclear names, needless duplication introduced by the diff, single-responsibility breaks, missing tests for changed behavior.
 
-### Spec
+Critical and Warning findings must include a concise suggested fix or verification step. Info fixes are optional.
 
-| Outcome | When | Severity |
-| ------- | ---- | -------- |
-| **missing** | CA/RF absent from diff | blocking |
-| **partial** | Incomplete; missing edge/assertion | blocking if CA requires; else important |
-| **wrong** | Diverges from spec | blocking |
-| **scope creep** | Outside spec scope | important (blocking if API change without RF) |
+## Verdict
 
-Test without CA assertion = partial. Unsigned assumption → ask.
+| Verdict | Criteria |
+| ------- | -------- |
+| `FAIL` | any Spec/Standards `blocking` or Quality `Critical` |
+| `PASS_WITH_NITS` | only `important`/`nit` or `Warning`/`Info` findings |
+| `PASS` | no findings |
 
-### Standards
-
-**Hard violations:** `AGENTS.md`, Unit Test Standards, spec conventions → blocking when mandatory.
-
-**Smells** (Fowler ch.3; repo override if documented): name smell + cite hunk.
-
-Mysterious Name · Duplicated Code · Feature Envy · Data Clumps · Primitive Obsession · Repeated Switches · Shotgun Surgery · Divergent Change · Speculative Generality · Message Chains · Middle Man · Refused Bequest
-
-**Lenses:** Architecture (layer, repo atomicity, coupling) · test quality (useless tests, missing cases covered by CA).
-
-Debatable preference → important/nit. No style without `AGENTS.md` or smell basis.
-
-### Quality
-
-Find bugs, security issues, and quality risks in **changed code**. Group every finding by severity and tag with category `[Security|Performance|Correctness|Maintainability]`.
-
-| Severity | Criterion |
-| -------- | --------- |
-| **Critical** | Security vulnerabilities, data loss risks, crashes |
-| **Warning** | Bugs, performance issues, anti-patterns |
-| **Info** | Suggestions, minor improvements |
-
-**Review dimensions** — scan changed hunks against each row; tag OWASP id on Security when clear (e.g. A01, A03).
-
-| Dimension | Check |
-| --------- | ----- |
-| **Security** | SQL injection · XSS · CSRF · authentication/authorization flaws · secrets/credentials in code · insecure deserialization · path traversal · SSRF |
-| **Performance** | N+1 queries · unnecessary memory allocations · algorithmic complexity (O(n²) in hot paths) · missing DB indexes (when query added/changed) · unbounded queries/loops · resource leaks |
-| **Correctness** | edge cases (empty input, null, overflow) · race conditions/concurrency · error handling/propagation · off-by-one · type safety |
-| **Maintainability** | naming clarity · single responsibility · duplication **introduced by this change** · test coverage for new/changed behavior · docs for non-obvious logic |
-
-**Axis boundaries** — Fowler smells, `AGENTS.md`, mandatory test patterns, CA-covered cases → **Standards** or **Spec** (not Quality). Quality Maintainability = gaps visible in the diff without re-auditing the whole module.
-
-**Actionable output:** `Critical` and `Warning` findings **must** include a short suggested fix as a fenced code block (minimal diff or pseudocode). `Info` — suggestion encouraged.
-
-## Report
+## Report Format
 
 ```markdown
 # Code Review
 
-**Context:** WIP | PR · **Mode:** Spec | Branch · **Fixed-point:** `<fp>` (`<sha>`) · **Commits:** N · **Round:** N/3 _(WIP)_
-**PR:** `#<n>` — `<title>` — `<url>` _(PR)_
-**Artifact:** `<path>` _(when saved)_
+**Context:** WIP | PR
+**Fixed-point:** `<fp>` (`<sha>`) or `PR #<n> (base: <base>, head: <head>)`
+**Commits:** N
+**Artifact:** `<path>` _(if saved)_
 
 ## Spec
 
-- **blocking** — CA03 missing: … (`…/file`, spec L120)
+- **blocking** - CA03 missing required empty-state behavior (`src/.../foo.ts`; spec L120)
 
 _(or: no spec available)_
 
 ## Standards
 
-- **blocking** — unit test uses a concrete repository implementation instead of the interface/abstraction — AGENTS Unit Test Standards
-- **nit** — Mysterious Name: `data2` in `…/bar`
+- **important** - Mysterious Name: `data2` obscures the changed payment payload (`src/.../bar.ts` L44)
 
 ## Quality
 
 ### Critical
 
-- **[Security] A03** — SQL concatenation with user input (`…/repo` L42)
+- **[Security] A03** - SQL query concatenates user input (`src/.../repo.ts` L42)
   ```text
-  // suggested: use a parameterized query / prepared statement
-  await db.query('SELECT … WHERE id = $1', [id]);
+  Use a parameterized query / prepared statement for the user-controlled value.
   ```
 
 ### Warning
 
-- **[Performance]** — N+1: loop loads related entity per row (`…/service` L88)
+- **[Performance]** - new loop loads related rows one-by-one (`src/.../service.ts` L88)
 
 ### Info
 
-- **[Maintainability]** — rename `data2` → `orderPayload` for clarity (`…/bar`)
+- **[Maintainability]** - rename `data2` to a domain name such as `orderPayload` (`src/.../bar.ts` L44)
 
 ## Verdict
 
 `PASS` | `PASS_WITH_NITS` | `FAIL`
 
-- Spec: X (B/I/N) · worst: …
-- Standards: Y (B/I/N) · worst: …
-- Quality: Z (C/W/I) · worst: …
+- Spec: X findings; worst: blocking | important | nit | none
+- Standards: X findings; worst: blocking | important | nit | none
+- Quality: X findings; worst: Critical | Warning | Info | none
 ```
 
-Each bullet: severity + what + where (one anchor). `Critical`/`Warning` include fix snippet. No paragraphs.
+Keep findings compact. Each bullet must include severity, what, where, and why it matters. Prefer `path:line` anchors when available.
 
-| Severity (Spec/Standards) | Criterion |
-| --------------------------- | --------- |
-| blocking | Missing/wrong CA/RF; mandatory pattern violation |
-| important | Should fix; non-blocking partial |
-| nit | Optional |
+## Artifacts
 
-| Severity (Quality) | Criterion |
-| ------------------ | --------- |
-| Critical | Security vuln, data loss, crash — maps to FAIL |
-| Warning | Bug, perf issue, anti-pattern |
-| Info | Minor suggestion, maintainability nit |
-
-## Artifact paths
-
-Subfolder `review-gaps/` next to source doc. Create if missing.
+Create review artifacts only when required by context.
 
 | Context | When | File |
-| -------- | ------ | ---- |
-| WIP | FAIL | `<id> - review-gaps.md` |
-| PR | Always | `pr-<n> - code-review.md` |
+| ------- | ---- | ---- |
+| WIP | `FAIL` | `<id> - review-gaps.md` |
+| PR | always | `pr-<n> - code-review.md` |
 
-**Resolution (first match):** `docs/specs/<file>` → `docs/specs/review-gaps/` · `docs/adr/<file>` → `docs/adr/review-gaps/` · PR only → `docs/review-gaps/pr-<n> - code-review.md` · WIP no doc → ask (default `docs/review-gaps/<id-or-branch> - review-gaps.md`).
+Path resolution:
 
-## review-gaps.md template
+- Source spec in `docs/specs/<file>` -> `docs/specs/review-gaps/`
+- Source ADR in `docs/adr/<file>` -> `docs/adr/review-gaps/`
+- PR without source doc -> `docs/review-gaps/pr-<n> - code-review.md`
+- WIP without source doc -> ask; default `docs/review-gaps/<id-or-branch> - review-gaps.md`
+
+### WIP Gaps Template
 
 ```markdown
-# Review Gaps — <id> <short title>
+# Review Gaps - <id> <short title>
 
 | Field | Value |
 | ----- | ----- |
-| Spec / ADR | `../<source-file>.md` |
+| Source | `../<source-file>.md` |
 | Fixed-point | `<fp>` (`<sha>`) |
 | Branch | `<branch>` |
 | Round | N/3 |
@@ -248,27 +197,42 @@ Subfolder `review-gaps/` next to source doc. Create if missing.
 
 | id | axis | severity | CA/RF | evidence | expected outcome |
 | -- | ---- | -------- | ----- | -------- | ---------------- |
-| G1 | Spec | blocking | CA03 | `src/…/foo` | … |
-| G2 | Quality | Critical | — | `src/…/repo` L42 | parameterized query; no injection |
+| G1 | Spec | blocking | CA03 | `src/.../foo.ts` | implement required empty-state behavior |
+| G2 | Quality | Critical | - | `src/.../repo.ts` L42 | parameterized query; no injection path |
 
-## Execution Plan (remediation)
+## Remediation Plan
 
-1. [Step] → files: […] → CA: CA0X → blocked-by: none → verify: [cmd] → commit: <type>(scope): …
+1. [Step] -> files: [...] -> CA/RF: CA0X -> verify: [cmd]
 
-Only blocking / Critical (and human-requested important/Warning). Stable ids G1, G2… for residual. Overwrite each round.
-
-## Assumptions / questions
-
-- … (spec doubt → ask; do not invent)
-
-## Residual (after revalidation)
+## Residual After Revalidation
 
 | id | status | notes |
 | -- | ------ | ----- |
-| G1 | fixed / open | … |
+| G1 | fixed / open | ... |
 ```
+
+Only include blocking/Critical gaps unless the user asks to include lower severities. Keep gap ids stable across revalidation rounds.
+
+## WIP Remediation Loop
+
+For WIP `FAIL`, ask once per round, max 3 rounds:
+
+```markdown
+### Remediation (round N/3)
+
+There are N blocking/critical findings. File: <path>
+Implement now with `implement`? [yes / no]
+```
+
+If yes, hand off to `.agents/skills/implement/SKILL.md` with the gaps file, source spec if any, fixed-point, and round scope. After implementation, revalidate using the same fixed-point and overwrite the gaps file with residual findings.
+
+After round 3, stop with the final verdict. Do not offer `pr-ship` while blocking/Critical findings remain.
 
 ## Prohibited
 
-- Implement fixes · post `gh pr review` (unless asked) · external scripts · mutation testing
-- **PR:** gaps, loop, or handoff · mix axis rankings · `pr-ship` with residual blocking/critical after 3 rounds (WIP)
+- Implement fixes unless explicitly asked.
+- Post `gh pr review` unless explicitly asked.
+- Run mutation testing or external audit scripts.
+- Report speculative findings without diff/spec evidence.
+- Mix axis rankings into one severity scale.
+- For PR: create gaps, start remediation loops, or hand off to implementation.
